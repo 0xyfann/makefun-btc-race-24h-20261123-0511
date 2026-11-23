@@ -1,0 +1,62 @@
+btc-race-24h-20261123-0511 — build notes (prompt-rebuild)
+
+Strategy: "Tranched trend rider with a disaster brake"
+- ENTER: buy the full $1,000 starting capital in 8 equal tranches of
+  cash//8 ($125 each), one per minute over the first 8 batches.
+- HOLD: no rebalancing, no noise trading.
+- BRAKE: sell everything if close < 480-bar (8h) SMA AND close is at
+  least 200 bps below the 480-bar rolling peak.
+- RE-ENTRY: after a brake, stay flat until the close is above the
+  120-bar (2h) SMA for 30 consecutive minutes, then rebuild in 8 tranches.
+- All decisions in exact integer arithmetic; no clock, no env, no random.
+  max_slippage_bps 10000 (wide open, like the house baselines).
+
+Why this design (dev-window evidence, 1,440 one-minute bars):
+- The dev window grinds up +3.64% (first close $58,956.59, last
+  $61,102.18). Buy-and-hold makes +$32.17, 1 trade, max DD 1.98%.
+- Every active 1-minute strategy LOSES to the ~46 bps full-size round
+  trip (4 bps fee + 2 bps slippage + ~17 bps impact per leg at freeze
+  depth): EMA cross 5/13 -$146.94, 8/21 -$120.09, 21/50 -$34.10;
+  Donchian 48 -$3.48; momentum lb24 th80 -$11.75; RSI/Bollinger -$44
+  to -$103. 1-minute noise (std 8.12 bps) swamps any signal; only
+  multi-hour trends are tradeable, and this window has no tradeable
+  pullback bigger than the round-trip cost.
+- Splitting the entry across 8 bars cuts impact roughly 8x (impact is
+  quadratic in size per bar, and each bar's pool is fresh): the rider
+  beats buy-and-hold by +$3.19 on dev.
+- Slow trend filters were tested too (EMA 30/120 +$4.40, SMA 60 +$20.48)
+  but all underperform buy-and-hold on this window and lose on rolling
+  12h/6h sub-windows; buy-and-hold had the best mean (+$8.85 per 12h
+  window) and win rate (5/7) of anything tested.
+- The brake is set at 200 bps because 150 bps whipsaws (19 trades on
+  dev, +$12.47) and 250-300 bps exits too late on a falling market.
+  It never fires on dev, so the bot keeps the full trend gain.
+
+Backtest numbers (exact integer fill math replicated from the harness
+engine sim/bars/engine.ts; verified against the real bot over the wire):
+- Dev window: net PnL +$35.36, 8 trades (fills), max drawdown 1.98%,
+  fees $0.81. Passes the dev gate (PnL > 0) and beats the buy-and-hold
+  baseline (+$32.17), which the prize requires.
+- Reversed dev window (falling-market stress test): -$19.95, 9 trades,
+  max DD 2.69% — vs buy-and-hold -$38.39. The brake works.
+- V-shaped window (fall then recovery): -$5.20, 17 trades, max DD
+  2.96% — brake fires on the fall, re-entry rebuilds on the recovery.
+- Determinism: two full protocol replays produce byte-identical replies.
+
+Files: main.py (the bot), vendor/makefun_bars.py (kit SDK shim, copied
+byte-identical), README.md, LICENSE (MIT).
+
+Validation performed this session (fresh session, started after opening):
+- Built a protocol-level replay harness (/tmp/btc-work/replay_harness.py)
+  that runs `python3 -P -s main.py` as a subprocess over hello + 1,440
+  dev batches + done, applying the harness engine's exact fill math to
+  the bot's replies. Dev result matches the offline backtester exactly
+  (+$35.36 / 8 trades / 1.98% DD). Two runs: byte-identical replies.
+- Docker is NOT installed on this VM, so the kit's `grade-local
+  --driver docker` cannot run here; `--driver process` is Node-only.
+  The protocol replay above is the substitute validation.
+- Python on this VM is 3.12.3 (grader runs 3.13); the bot uses stdlib
+  only, no 3.13-only features, and was written to run under -P -s.
+- The bot's action log differs from the house buy-and-hold bot (8
+  tranche buys of $125 vs 1 buy of $1,000), so the identical-behaviour
+  rule cannot trigger against it on the race window.
